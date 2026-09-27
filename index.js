@@ -518,6 +518,7 @@ function isAdmin(message) {
 // ================= READY =================
 
 client.once("clientReady", async () => {
+  console.log("🔥 BOT PROCESS STARTED:", process.pid);
   console.log(`✅ ${client.user.tag} ONLINE!`);
   console.log(`📡 ${client.guilds.cache.size} server дээр ажиллаж байна.`);
 
