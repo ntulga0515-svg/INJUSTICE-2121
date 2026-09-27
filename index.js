@@ -1,5 +1,19 @@
 require("dotenv").config();
 
+const http = require("http");
+
+const PORT = process.env.PORT || 10000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/plain"
+  });
+
+  res.end("INJUSTICE AI ONLINE");
+}).listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 Web server listening on port ${PORT}`);
+});
+
 const { GoogleGenAI } = require("@google/genai");
 
 const gemini = new GoogleGenAI({
@@ -20,16 +34,35 @@ const fs = require("fs");
 const path = require("path");
 
 const PREFIX = "!";
+function timeToMs(time) {
+  if (!time) return null;
+
+  const match = /^(\d+)(s|m|h|d)$/i.exec(time);
+
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const unit = match[2].toLowerCase();
+
+  const multipliers = {
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000
+  };
+
+  return value * multipliers[unit];
+}
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions
   ]
 });
-
 // ================= DATABASE =================
 
 const dbFile = path.join(__dirname, "database.json");
@@ -50,6 +83,70 @@ if (fs.existsSync(dbFile)) {
 function save() {
   fs.writeFileSync(dbFile, JSON.stringify(db, null, 2));
 }
+// ================= REACTION ROLES =================
+
+const reactionRoleMenus = {
+
+  // 🎮 GAME
+  game: {
+    "🎯": "CS2",
+    "🟣": "Valorant",
+    "🪖": "PUBG",
+    "🧙": "Dota 2",
+    "🟥": "Roblox",
+    "👻": "Other"
+  },
+
+  // 🔫 CS2 ROLE
+  cs2: {
+    "🔫": "Rifler",
+    "🎯": "AWPer",
+    "💣": "Entry Fragger",
+    "🧠": "IGL",
+    "🛡️": "Support",
+    "🐀": "Lurker"
+  },
+
+  // 🏆 FACEIT
+  faceit: {
+    "1489478852882469025": "Faceit level 1",
+    "1489478879843188807": "Faceit level 2",
+    "1489479174933450813": "Faceit level 3",
+    "1489479202615853177": "Faceit level 4",
+    "1489479228197044316": "Faceit level 5",
+    "1489479255493705808": "Faceit level 6",
+    "1489479326050287748": "Faceit level 7",
+    "1489479345541222511": "Faceit level 8",
+    "1489479369742225448": "Faceit level 9",
+    "1487865233665167450": "Faceit level 10",
+    "1494845706022682795": "Faceit Challenger"
+  },
+
+  // 🎨 COLOR
+  color: {
+    "❤️": "Red",
+    "🧡": "Orange",
+    "💛": "Yellow",
+    "💚": "Green",
+    "💙": "Blue",
+    "💜": "Purple",
+    "🩷": "Pink",
+    "🩵": "Cyan",
+    "🖤": "Black",
+    "🤍": "White",
+    "🩶": "Gray",
+    "🤎": "Brown"
+  },
+
+  // 🎂 AGE
+age: {
+  "💗": "10-17",
+  "🧡": "17-20",
+  "💛": "21-24",
+  "💜": "25-29",
+  "💚": "30+"
+  }
+};
 // ================= AI SYSTEM =================
 
 const aiMemory = {};
@@ -126,6 +223,7 @@ function guildData(id) {
       welcome: null,
       goodbye: null,
       autorole: null,
+      reactionRoles: {},
 
       ticket: {
         enabled: false,
@@ -140,6 +238,9 @@ function guildData(id) {
 
   if (!db.guilds[id].expressions) {
     db.guilds[id].expressions = {};
+  }
+  if (!db.guilds[id].reactionRoles) {
+    db.guilds[id].reactionRoles = {};
   }
 
   if (!db.guilds[id].ticket) {
@@ -416,13 +517,15 @@ function isAdmin(message) {
 
 // ================= READY =================
 
-client.once("clientReady", () => {
+client.once("clientReady", async () => {
   console.log(`✅ ${client.user.tag} ONLINE!`);
   console.log(`📡 ${client.guilds.cache.size} server дээр ажиллаж байна.`);
 
   client.user.setActivity("!help | INJUSTICE");
+for (const guild of client.guilds.cache.values()) {
+    await updateMemberCount(guild);
+  }
 });
-
 // ================= WELCOME =================
 
 client.on("guildMemberAdd", async member => {
@@ -522,6 +625,250 @@ client.on("messageCreate", async message => {
   if (!message.content.startsWith(PREFIX)) return;
 const content = message.content.slice(PREFIX.length).trim();
 var command = content.split(/\s+/)[0].toLowerCase();
+// ================= SETUP REACTION ROLES =================
+
+if (command === "setuproles") {
+
+  if (!message.guild) {
+    return message.reply("❌ Энэ command server дээр ажиллана.");
+  }
+
+  if (!isAdmin(message)) {
+    return message.reply(
+      "❌ Энэ command-д Administrator permission хэрэгтэй."
+    );
+  }
+
+  const guild = message.guild;
+  const me = guild.members.me;
+
+  if (!me) {
+    return message.reply("❌ Bot member олдсонгүй.");
+  }
+
+  if (!me.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    return message.reply(
+      "❌ Bot-д **Manage Roles** permission хэрэгтэй."
+    );
+  }
+
+  const data = guildData(guild.id);
+
+  // ================= CREATE ROLES =================
+
+  for (const [category, roles] of Object.entries(reactionRoleMenus)) {
+
+    for (const roleName of Object.values(roles)) {
+
+      let role = guild.roles.cache.find(
+        r => r.name === roleName
+      );
+
+      if (!role) {
+        try {
+
+          role = await guild.roles.create({
+            name: roleName,
+            reason: "INJUSTICE Reaction Roles"
+          });
+
+        } catch (error) {
+
+          console.log(
+            `❌ Role үүсгэхэд алдаа: ${roleName}`,
+            error.message
+          );
+
+          continue;
+        }
+      }
+
+      // Bot өөрөө role-оо өгч чадах эсэх
+      if (
+        role.position >= me.roles.highest.position &&
+        role.id !== guild.id
+      ) {
+        console.log(
+          `⚠️ Bot-д ${roleName} role өгөх боломжгүй. Bot role-оос дээгүүр байна.`
+        );
+      }
+    }
+  }
+
+  // ================= CREATE MESSAGES =================
+
+  const messages = {};
+
+  // GAME
+  messages.game = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎮 𝑮𝑨𝑴𝑬")
+        .setDescription(
+          "Одоо тоглодог game-аа сонгоно уу.\n\n" +
+          "🎯 **CS2**\n" +
+          "🟣 **Valorant**\n" +
+          "🪖 **PUBG**\n" +
+          "🧙 **Dota 2**\n" +
+          "🟥 **Roblox**\n" +
+          "👻 **Other**"
+        )
+        .setColor(0x5865f2)
+    ]
+  });
+
+  // CS2 ROLE
+  messages.cs2 = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🔫 𝑪𝑺𝟐 𝑹𝑶𝑳𝑬")
+        .setDescription(
+          "CS2 дээрх role-оо сонгоно уу.\n\n" +
+          "🔫 **Rifler**\n" +
+          "🎯 **AWPer**\n" +
+          "💣 **Entry Fragger**\n" +
+          "🧠 **IGL**\n" +
+          "🛡️ **Support**\n" +
+          "🐀 **Lurker**"
+        )
+        .setColor(0x8b5cf6)
+    ]
+  });
+
+  // FACEIT
+  messages.faceit = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🏆 𝑭𝑨𝑪𝑬𝑰𝑻 𝑳𝑬𝑽𝑬𝑳")
+        .setDescription(
+          "Өөрийн FACEIT level-ээ сонгоно уу.\n\n" +
+          "<:faceit1:1489478852882469025> **Level 1**\n" +
+          "<:faceit2:1489478879843188807> **Level 2**\n" +
+          "<:faceit3:1489479174933450813> **Level 3**\n" +
+          "<:faceit4:1489479202615853177> **Level 4**\n" +
+          "<:faceit5:1489479228197044316> **Level 5**\n" +
+          "<:faceit6:1489479255493705808> **Level 6**\n" +
+          "<:faceit7:1489479326050287748> **Level 7**\n" +
+          "<:faceit8:1489479345541222511> **Level 8**\n" +
+          "<:faceit9:1489479369742225448> **Level 9**\n" +
+          "<:faceit10:1487865233665167450> **Level 10**\n" +
+          "<:challenger:1494845706022682795> **Challenger**"
+        )
+        .setColor(0xed4245)
+    ]
+  });
+
+  // COLOR
+  messages.color = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎨 𝑫𝑼𝑹𝑻𝑨𝑰 𝑼𝑵𝑮𝑼")
+        .setDescription(
+          "Дуртай өнгөө сонгоно уу.\n\n" +
+          "❤️ **Red**\n" +
+          "🧡 **Orange**\n" +
+          "💛 **Yellow**\n" +
+          "💚 **Green**\n" +
+          "💙 **Blue**\n" +
+          "💜 **Purple**\n" +
+          "🩷 **Pink**\n" +
+          "🩵 **Cyan**\n" +
+          "🖤 **Black**\n" +
+          "🤍 **White**\n" +
+          "🩶 **Gray**\n" +
+          "🤎 **Brown**"
+        )
+        .setColor(0xeb459e)
+    ]
+  });
+
+  // AGE
+  messages.age = await message.channel.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎂 𝑵𝑨𝑺")
+        .setDescription(
+          "Насны ангиллаа сонгоно уу.\n\n" +
+          "💗 **10-17**\n" +
+          "🧡 **17-20**\n" +
+          "💛 **21-24**\n" +
+          "💜 **25-29**\n" +
+          "💚 **30+**"
+        )
+        .setColor(0x57f287)
+    ]
+  });
+
+  // ================= SAVE MESSAGE IDS =================
+
+  data.reactionRoles = {
+    game: messages.game.id,
+    cs2: messages.cs2.id,
+    faceit: messages.faceit.id,
+    color: messages.color.id,
+    age: messages.age.id
+  };
+
+  save();
+
+  // ================= ADD REACTIONS =================
+
+  console.log("🔥 REACTION START");
+
+  for (const [category, msg] of Object.entries(messages)) {
+
+    const emojis = Object.keys(reactionRoleMenus[category]);
+
+    console.log(
+      `📌 ${category}: ${emojis.length} reaction`
+    );
+
+    for (const emoji of emojis) {
+
+      try {
+
+        // Custom emoji
+        if (/^\d+$/.test(emoji)) {
+
+          const customEmoji = guild.emojis.cache.get(emoji);
+
+          if (!customEmoji) {
+            console.log(
+              `❌ Custom emoji олдсонгүй: ${emoji}`
+            );
+            continue;
+          }
+
+          await msg.react(customEmoji);
+
+        }
+
+        // Normal emoji
+        else {
+
+          await msg.react(emoji);
+
+        }
+
+        console.log(`✅ ${category} → ${emoji}`);
+
+      } catch (error) {
+
+        console.log(
+          `❌ Reaction error: ${category} → ${emoji}`,
+          error.message
+        );
+
+      }
+    }
+  }
+
+  console.log("🔥 REACTION FINISHED");
+
+  return message.reply(
+    "✅ **5 Reaction Role panel** амжилттай үүслээ!"
+  );
+}
 // ================= AI CHAT =================
 if (command === "ai") {
   const prompt = content.slice(command.length).trim();
@@ -2187,7 +2534,110 @@ if (command === "slots") {
     `💡 Бүх command: \`!help\``
   );
 });
+// ================= REACTION ROLE HANDLER =================
 
+async function handleReactionRole(reaction, user, add) {
+
+  if (user.bot) return;
+
+  try {
+
+    if (reaction.partial) {
+      await reaction.fetch();
+    }
+
+    const guild = reaction.message.guild;
+
+    if (!guild) return;
+
+    const data = guildData(guild.id);
+
+    if (!data.reactionRoles) return;
+
+    let category = null;
+
+    for (const [type, messageId] of Object.entries(data.reactionRoles)) {
+      if (messageId === reaction.message.id) {
+        category = type;
+        break;
+      }
+    }
+
+    if (!category) return;
+
+    const roleMap = reactionRoleMenus[category];
+
+    if (!roleMap) return;
+
+    const emojiKey =
+      reaction.emoji.id || reaction.emoji.name;
+
+    const roleName = roleMap[emojiKey];
+
+    if (!roleName) return;
+
+    const role = guild.roles.cache.find(
+      r => r.name === roleName
+    );
+
+    if (!role) return;
+
+    const member = await guild.members.fetch(user.id);
+
+    // ================= ADD ROLE =================
+
+    if (add) {
+
+      // Нэг category дотор өмнөх role-ийг авна
+      for (const otherRoleName of Object.values(roleMap)) {
+
+        if (otherRoleName === roleName) continue;
+
+        const otherRole = guild.roles.cache.find(
+          r => r.name === otherRoleName
+        );
+
+        if (otherRole && member.roles.cache.has(otherRole.id)) {
+          await member.roles.remove(otherRole).catch(() => {});
+        }
+      }
+
+      await member.roles.add(role);
+
+      console.log(
+        `✅ ${user.username} → ${roleName}`
+      );
+
+    }
+
+    // ================= REMOVE ROLE =================
+
+    else {
+
+      await member.roles.remove(role);
+
+      console.log(
+        `❌ ${user.username} → ${roleName}`
+      );
+    }
+
+  } catch (error) {
+
+    console.log(
+      "❌ REACTION ROLE ERROR:",
+      error.message
+    );
+
+  }
+}
+
+client.on("messageReactionAdd", async (reaction, user) => {
+  await handleReactionRole(reaction, user, true);
+});
+
+client.on("messageReactionRemove", async (reaction, user) => {
+  await handleReactionRole(reaction, user, false);
+});
 // ================= TICKET SYSTEM =================
 
 client.on("interactionCreate", async interaction => {
@@ -2205,10 +2655,9 @@ if (interaction.customId === "ticket_create") {
     );
 
     if (existingTicket) {
-      return interaction.reply({
-        content: `❌ Чамд аль хэдийн ticket байна: ${existingTicket}`,
-        ephemeral: true
-      });
+    return interaction.editReply({
+  content: `❌ Чамд аль хэдийн ticket байна: ${existingTicket}`
+});
     }
  const data = guildData(guild.id);
     const permissions = [
@@ -2316,3 +2765,26 @@ if (!process.env.TOKEN) {
 }
 
 client.login(process.env.TOKEN);
+// ================= MEMBER COUNT =================
+
+async function updateMemberCount(guild) {
+  try {
+    const channel = guild.channels.cache.find(
+      ch => ch.name.startsWith("👥・Members:")
+    );
+
+    if (!channel) return;
+
+    await channel.setName(`👥・Members: ${guild.memberCount}`);
+  } catch (error) {
+    console.log("❌ Member count update error:", error.message);
+  }
+}
+
+client.on("guildMemberAdd", async member => {
+  await updateMemberCount(member.guild);
+});
+
+client.on("guildMemberRemove", async member => {
+  await updateMemberCount(member.guild);
+});
